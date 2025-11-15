@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+# Superpowers integration for GitHub Copilot CLI
+# Provides skill management and bootstrap functionality
+set -euo pipefail
+
+# Paths
+SUPERPOWERS_SKILLS_DIR="${HOME}/.copilot/superpowers/skills"
+PERSONAL_SKILLS_DIR="${HOME}/.copilot/skills"
+BOOTSTRAP_FILE="${HOME}/.copilot/superpowers/.copilot/superpowers-bootstrap.md"
+SUPERPOWERS_REPO_DIR="${HOME}/.copilot/superpowers"
+
+# Colors for output
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check for updates
+check_for_updates() {
+    if [ ! -d "$SUPERPOWERS_REPO_DIR/.git" ]; then
+        return 1
+    fi
+    
+    cd "$SUPERPOWERS_REPO_DIR" || return 1
+    
+    # Quick check with timeout to avoid delays if network is down
+    if timeout 3s git fetch origin 2>/dev/null; then
+        local status
+        status=$(git status --porcelain=v1 --branch 2>/dev/null || echo "")
+        
+        if echo "$status" | grep -q '\[behind '; then
+            return 0  # Updates available
+        fi
+    fi
+    
+    return 1  # No updates or check failed
+}
+
+# Extract frontmatter from SKILL.md file
+extract_frontmatter() {
+    local file=$1
+    local key=$2
+    
+    if [ ! -f "$file" ]; then
+        return 1
+    fi
+    
+    awk -v key="$key" '
+        BEGIN { in_frontmatter=0; found=0 }
+        /^---$/ { 
+            if (!in_frontmatter) { 
+                in_frontmatter=1; 
+                next 
+            } else { 
+                exit 
+            } 
+        }
+        in_frontmatter && $0 ~ "^" key ":" { 
+            sub("^" key ":[[:space:]]*", ""); 
+            print; 
+            found=1 
+        }
+    ' "$file"
+}
+
+# Print skill information
+print_skill() {
+    local skill_path=$1
+    local source_type=$2
+    local skill_file="${skill_path}/SKILL.md"
+    
+    if [ ! -f "$skill_file" ]; then
+        return
+    fi
+    
+    local rel_path
+    if [ "$source_type" = "personal" ]; then
+        rel_path=$(realpath --relative-to="$PERSONAL_SKILLS_DIR" "$skill_path" 2>/dev/null || echo "$skill_path")
+        echo "$rel_path"  # Personal skills are not namespaced
+    else
+        rel_path=$(realpath --relative-to="$SUPERPOWERS_SKILLS_DIR" "$skill_path" 2>/dev/null || echo "$skill_path")
+        echo "superpowers:${rel_path}"  # Superpowers skills get superpowers namespace
+    fi
+    
+    # Extract and print metadata
+    local description when_to_use
+    description=$(extract_frontmatter "$skill_file" "description")
+    when_to_use=$(extract_frontmatter "$skill_file" "when_to_use")
+    
+    if [ -n "$description" ]; then
+        echo "  $description"
+    fi
+    if [ -n "$when_to_use" ]; then
+        echo "  When to use: $when_to_use"
+    fi
+    echo ""
+}
+
+# Find skills in directory
+find_skills_in_dir() {
+    local dir=$1
+    local source_type=$2
+    # max_depth parameter available but not used in current implementation
+    
+    if [ ! -d "$dir" ]; then
+        return
+    fi
+    
+    if [ "$source_type" = "personal" ]; then
+        # For personal skills, search deeper (category/skill structure)
+        find "$dir" -maxdepth 2 -type f -name "SKILL.md" -exec dirname {} \;
+    else
+        # For superpowers skills, only search one level
+        find "$dir" -maxdepth 1 -type d ! -path "$dir" -exec test -f {}/SKILL.md \; -print
+    fi
+}
+
+# Command: find-skills (list)
+cmd_find_skills() {
+    echo "Available skills:"
+    echo "=================="
+    echo ""
+    
+    local found_skills=()
+    
+    # Find personal skills first (these take precedence)
+    if [ -d "$PERSONAL_SKILLS_DIR" ]; then
+        while IFS= read -r skill_path; do
+            local rel_path
+            rel_path=$(realpath --relative-to="$PERSONAL_SKILLS_DIR" "$skill_path" 2>/dev/null || echo "$skill_path")
+            found_skills+=("$rel_path")
+            print_skill "$skill_path" "personal"
+        done < <(find_skills_in_dir "$PERSONAL_SKILLS_DIR" "personal" 2)
+    fi
+    
+    # Find superpowers skills (only if not already found in personal)
+    if [ -d "$SUPERPOWERS_SKILLS_DIR" ]; then
+        while IFS= read -r skill_path; do
+            local rel_path
+            rel_path=$(realpath --relative-to="$SUPERPOWERS_SKILLS_DIR" "$skill_path" 2>/dev/null || echo "$skill_path")
+            
+            # Check if this skill was already found in personal skills
+            local already_found=0
+            for found in "${found_skills[@]}"; do
+                if [ "$found" = "$rel_path" ]; then
+                    already_found=1
+                    break
+                fi
+            done
+            
+            if [ $already_found -eq 0 ]; then
+                print_skill "$skill_path" "superpowers"
+            fi
+        done < <(find_skills_in_dir "$SUPERPOWERS_SKILLS_DIR" "superpowers" 1)
+    fi
+    
+    echo "Usage:"
+    echo "  superpowers-copilot use-skill <skill-name>   # Load a specific skill"
+    echo ""
+    echo "Skill naming:"
+    echo "  Superpowers skills: superpowers:skill-name (from ~/.copilot/superpowers/skills/)"
+    echo "  Personal skills: skill-name (from ~/.copilot/skills/)"
+    echo "  Personal skills override superpowers skills when names match."
+    echo ""
+    echo "Note: All skills are disclosed at session start via bootstrap."
+}
+
+# Command: bootstrap
+cmd_bootstrap() {
+    echo "# Superpowers Bootstrap for GitHub Copilot CLI"
+    echo "# =============================================="
+    echo ""
+    
+    # Check for updates (with timeout protection)
+    if check_for_updates; then
+        echo "## Update Available"
+        echo ""
+        echo -e "${YELLOW}⚠️  Your superpowers installation is behind the latest version.${NC}"
+        echo "To update, run: \`cd ~/.copilot/superpowers && git pull\`"
+        echo ""
+        echo "---"
+        echo ""
+    fi
+    
+    # Show the bootstrap instructions
+    if [ -f "$BOOTSTRAP_FILE" ]; then
+        echo "## Bootstrap Instructions:"
+        echo ""
+        cat "$BOOTSTRAP_FILE"
+        echo ""
+        echo "---"
+        echo ""
+    fi
+    
+    # Run find-skills to show available skills
+    echo "## Available Skills:"
+    echo ""
+    cmd_find_skills
+    
+    echo ""
+    echo "---"
+    echo ""
+    
+    # Load the using-superpowers skill automatically
+    echo "## Auto-loading superpowers:using-superpowers skill:"
+    echo ""
+    cmd_use_skill "superpowers:using-superpowers"
+    
+    echo ""
+    echo "---"
+    echo ""
+    echo "# Bootstrap Complete!"
+    echo "# You now have access to all superpowers skills."
+    echo "# Use \"superpowers-copilot use-skill <skill>\" to load and apply skills."
+    echo "# Remember: If a skill applies to your task, you MUST use it!"
+}
+
+# Command: use-skill
+cmd_use_skill() {
+    local skill_name=$1
+    
+    if [ -z "$skill_name" ]; then
+        echo "Usage: superpowers-copilot use-skill <skill-name>"
+        echo "Examples:"
+        echo "  superpowers-copilot use-skill superpowers:brainstorming  # Load superpowers skill"
+        echo "  superpowers-copilot use-skill brainstorming              # Load personal skill (or superpowers if not found)"
+        echo "  superpowers-copilot use-skill my-custom-skill            # Load personal skill"
+        return 1
+    fi
+    
+    # Handle namespaced skill names
+    local actual_skill_path
+    local force_superpowers=0
+    
+    if [[ "$skill_name" == superpowers:* ]]; then
+        # Remove the superpowers: namespace prefix
+        actual_skill_path="${skill_name#superpowers:}"
+        force_superpowers=1
+    else
+        actual_skill_path="$skill_name"
+    fi
+    
+    # Remove "skills/" prefix if present
+    if [[ "$actual_skill_path" == skills/* ]]; then
+        actual_skill_path="${actual_skill_path#skills/}"
+    fi
+    
+    # Function to find skill file
+    find_skill_file() {
+        local search_path=$1
+        
+        # Check for exact match with SKILL.md
+        if [ -f "${search_path}/SKILL.md" ]; then
+            echo "${search_path}/SKILL.md"
+            return 0
+        fi
+        
+        # Check for direct SKILL.md file
+        if [[ "$search_path" == *.md ]] && [ -f "$search_path" ]; then
+            echo "$search_path"
+            return 0
+        fi
+        
+        return 1
+    }
+    
+    local skill_file=""
+    
+    # If superpowers: namespace was used, only check superpowers skills
+    if [ $force_superpowers -eq 1 ]; then
+        if [ -d "$SUPERPOWERS_SKILLS_DIR" ]; then
+            skill_file=$(find_skill_file "${SUPERPOWERS_SKILLS_DIR}/${actual_skill_path}") || true
+        fi
+    else
+        # First check personal skills directory (takes precedence)
+        if [ -d "$PERSONAL_SKILLS_DIR" ]; then
+            skill_file=$(find_skill_file "${PERSONAL_SKILLS_DIR}/${actual_skill_path}") || true
+            if [ -n "$skill_file" ]; then
+                echo "# Loading personal skill: ${actual_skill_path}"
+                echo "# Source: ${skill_file}"
+                echo ""
+            fi
+        fi
+        
+        # If not found in personal, check superpowers skills
+        if [ -z "$skill_file" ] && [ -d "$SUPERPOWERS_SKILLS_DIR" ]; then
+            skill_file=$(find_skill_file "${SUPERPOWERS_SKILLS_DIR}/${actual_skill_path}") || true
+            if [ -n "$skill_file" ]; then
+                echo "# Loading superpowers skill: superpowers:${actual_skill_path}"
+                echo "# Source: ${skill_file}"
+                echo ""
+            fi
+        fi
+    fi
+    
+    # If still not found, error
+    if [ -z "$skill_file" ] || [ ! -f "$skill_file" ]; then
+        echo "Error: Skill not found: ${actual_skill_path}"
+        echo ""
+        echo "Available skills:"
+        cmd_find_skills
+        return 1
+    fi
+    
+    # Extract frontmatter and content
+    local name description when_to_use
+    name=$(extract_frontmatter "$skill_file" "name")
+    description=$(extract_frontmatter "$skill_file" "description")
+    when_to_use=$(extract_frontmatter "$skill_file" "when_to_use")
+    
+    # Extract content after frontmatter
+    local content
+    content=$(awk '
+        BEGIN { in_frontmatter=0; frontmatter_ended=0 }
+        /^---$/ { 
+            if (!in_frontmatter) { 
+                in_frontmatter=1; 
+                next 
+            } else { 
+                frontmatter_ended=1; 
+                next 
+            } 
+        }
+        frontmatter_ended || !in_frontmatter { print }
+    ' "$skill_file")
+    
+    # Display skill header with clean info
+    local display_name
+    if [ $force_superpowers -eq 1 ]; then
+        display_name="superpowers:${actual_skill_path}"
+    elif [[ "$skill_file" == *"$PERSONAL_SKILLS_DIR"* ]]; then
+        display_name="$actual_skill_path"
+    else
+        display_name="superpowers:${actual_skill_path}"
+    fi
+    
+    local skill_directory
+    skill_directory=$(dirname "$skill_file")
+    
+    echo "# ${name:-$display_name}"
+    if [ -n "$description" ]; then
+        echo "# $description"
+    fi
+    if [ -n "$when_to_use" ]; then
+        echo "# When to use: $when_to_use"
+    fi
+    echo "# Supporting tools and docs are in ${skill_directory}"
+    echo "# ============================================"
+    echo ""
+    
+    # Display the skill content (without frontmatter)
+    echo "$content"
+}
+
+# Command: search
+cmd_search() {
+    local query=$1
+    
+    if [ -z "$query" ]; then
+        echo "Usage: superpowers-copilot search <query>"
+        echo "Example: superpowers-copilot search debugging"
+        return 1
+    fi
+    
+    echo "Searching skills for: $query"
+    echo "============================="
+    echo ""
+    
+    local found_any=0
+    
+    # Search in personal skills
+    if [ -d "$PERSONAL_SKILLS_DIR" ]; then
+        while IFS= read -r skill_path; do
+            local skill_file="${skill_path}/SKILL.md"
+            if grep -iq "$query" "$skill_file" 2>/dev/null; then
+                found_any=1
+                print_skill "$skill_path" "personal"
+            fi
+        done < <(find_skills_in_dir "$PERSONAL_SKILLS_DIR" "personal" 2)
+    fi
+    
+    # Search in superpowers skills
+    if [ -d "$SUPERPOWERS_SKILLS_DIR" ]; then
+        while IFS= read -r skill_path; do
+            local skill_file="${skill_path}/SKILL.md"
+            if grep -iq "$query" "$skill_file" 2>/dev/null; then
+                found_any=1
+                print_skill "$skill_path" "superpowers"
+            fi
+        done < <(find_skills_in_dir "$SUPERPOWERS_SKILLS_DIR" "superpowers" 1)
+    fi
+    
+    if [ $found_any -eq 0 ]; then
+        echo "No skills found matching: $query"
+    fi
+}
+
+# Command: help
+cmd_help() {
+    cat << 'EOF'
+Superpowers for GitHub Copilot CLI
+
+Usage:
+  superpowers-copilot bootstrap              # Run complete bootstrap with all skills
+  superpowers-copilot use-skill <skill-name> # Load a specific skill
+  superpowers-copilot list                   # List all available skills
+  superpowers-copilot search <query>         # Search for skills by keyword
+  superpowers-copilot help                   # Show this help message
+
+Examples:
+  superpowers-copilot bootstrap
+  superpowers-copilot use-skill superpowers:brainstorming
+  superpowers-copilot use-skill my-custom-skill
+  superpowers-copilot list
+  superpowers-copilot search debugging
+
+Skill Naming:
+  Superpowers skills: superpowers:skill-name (from ~/.copilot/superpowers/skills/)
+  Personal skills: skill-name (from ~/.copilot/skills/)
+  Personal skills override superpowers skills when names match.
+
+For more information, visit: https://github.com/obra/superpowers
+EOF
+}
+
+# Main CLI dispatcher
+main() {
+    local command=${1:-help}
+    
+    case "$command" in
+        bootstrap)
+            cmd_bootstrap
+            ;;
+        use-skill)
+            cmd_use_skill "${2:-}"
+            ;;
+        list|find-skills)
+            cmd_find_skills
+            ;;
+        search)
+            cmd_search "${2:-}"
+            ;;
+        help|--help|-h)
+            cmd_help
+            ;;
+        *)
+            echo "Unknown command: $command"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
