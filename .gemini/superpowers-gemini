@@ -179,11 +179,14 @@ When you encounter a task that has a relevant skill, you MUST use it.
 
 When skills reference Claude Code tools, use these Gemini CLI equivalents:
 
-- `TodoWrite` → Use your planning/task management tools
+- `TodoWrite` → Use Gemini's `todo` tool (see https://geminicli.com/docs/tools/todos/)
 - `Skill` tool → Run `~/.gemini/superpowers/.gemini/superpowers-gemini use-skill <name>`
 - `Read`, `Write`, `Edit` → Use your native file operations
 - `Bash` → Use your shell execution capabilities
 - Subagent tools → Handle directly (subagents may not be available yet)
+
+For complete Gemini CLI tool reference, see https://geminicli.com/docs/tools/
+For CLI commands documentation, see https://geminicli.com/docs/cli/commands/
 
 ## Skills Naming
 

@@ -8,10 +8,12 @@ You have superpowers.
 
 **Tool Mapping for Gemini CLI:**
 When skills reference tools you don't have, substitute your equivalent tools:
-- `TodoWrite` → Use your planning/task tracking tool (report_progress or similar)
+- `TodoWrite` → Use Gemini's `todo` tool (see https://geminicli.com/docs/tools/todos/)
 - `Task` tool with subagents → Tell the user that subagents may not be available and you'll do the work directly
 - `Skill` tool → `~/.gemini/superpowers/.gemini/superpowers-gemini use-skill` command (already available)
-- `Read`, `Write`, `Edit`, `Bash` → Use your native tools with similar functions
+- `Read`, `Write`, `Edit`, `Bash` → Use your native file operations and shell execution tools
+- For complete tool reference, see https://geminicli.com/docs/tools/
+- For CLI commands, see https://geminicli.com/docs/cli/commands/
 
 **Skills naming:**
 - Superpowers skills: `superpowers:skill-name` (from ~/.gemini/superpowers/skills/)
