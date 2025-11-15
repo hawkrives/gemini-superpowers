@@ -56,6 +56,31 @@ Check that commands appear:
 
 Tell Codex to fetch https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.codex/INSTALL.md and follow the instructions.
 
+### GitHub Copilot CLI (Experimental)
+
+**Note:** GitHub Copilot CLI support is experimental and may require refinement based on user feedback.
+
+**Quick Install:**
+
+```bash
+# Clone the repository
+git clone https://github.com/hawkrives/gemini-superpowers.git ~/.copilot/superpowers
+
+# Create personal skills directory
+mkdir -p ~/.copilot/skills
+
+# Run bootstrap
+~/.copilot/superpowers/.copilot/superpowers-copilot bootstrap
+```
+
+**For detailed setup and usage instructions**, see [.copilot/INSTALL.md](.copilot/INSTALL.md)
+
+The Copilot CLI integration provides:
+- **Skills on demand** - Load skills as needed to minimize token usage
+- **Personal skills support** - Override or extend with your own skills in `~/.copilot/skills/`
+- **Bash-based tool** - Simple script with no dependencies
+- **Manual or automatic bootstrap** - Run at session start or configure for automatic loading
+
 ## Quick Start
 
 ### Using Slash Commands
