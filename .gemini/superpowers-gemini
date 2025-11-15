@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+
+# superpowers-gemini: Skills system for Gemini CLI
+# Based on superpowers-codex by Jesse Vincent
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUPERPOWERS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PERSONAL_SKILLS_DIR="${HOME}/.gemini/skills"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+usage() {
+    cat <<EOF
+superpowers-gemini - Skills system for Gemini CLI
+
+USAGE:
+    superpowers-gemini <command> [args]
+
+COMMANDS:
+    bootstrap              Show available skills and usage instructions
+    use-skill <name>       Load and display a skill
+    list                   List all available skills
+    search <query>         Search for skills by name or description
+    help                   Show this help message
+
+EXAMPLES:
+    superpowers-gemini bootstrap
+    superpowers-gemini use-skill brainstorming
+    superpowers-gemini list
+    superpowers-gemini search debugging
+EOF
+}
+
+# Find all available skills
+find_skills() {
+    local skills=()
+
+    # Find superpowers skills
+    if [[ -d "${SUPERPOWERS_ROOT}/skills" ]]; then
+        while IFS= read -r -d '' skill_file; do
+            local skill_dir
+            local skill_name
+            skill_dir=$(dirname "$skill_file")
+            skill_name=$(basename "$skill_dir")
+            skills+=("superpowers:${skill_name}:${skill_file}")
+        done < <(find "${SUPERPOWERS_ROOT}/skills" -mindepth 1 -maxdepth 2 -name "SKILL.md" -print0 2>/dev/null)
+    fi
+
+    # Find personal skills (these override superpowers skills)
+    if [[ -d "${PERSONAL_SKILLS_DIR}" ]]; then
+        while IFS= read -r -d '' skill_file; do
+            local skill_dir
+            local skill_name
+            skill_dir=$(dirname "$skill_file")
+            skill_name=$(basename "$skill_dir")
+            skills+=("personal:${skill_name}:${skill_file}")
+        done < <(find "${PERSONAL_SKILLS_DIR}" -mindepth 1 -maxdepth 2 -name "SKILL.md" -print0 2>/dev/null)
+    fi
+
+    printf '%s\n' "${skills[@]+"${skills[@]}"}"
+}
+
+# List all skills
+list_skills() {
+    echo "Available Skills:"
+    echo "================="
+    echo
+
+    local personal_count=0
+    local superpowers_count=0
+
+    # Use mapfile to read all sorted skills into an array
+    local sorted_skills
+    mapfile -t sorted_skills < <(find_skills | sort -t':' -k2)
+
+    # Now process the sorted skills
+    for skill in "${sorted_skills[@]}"; do
+        IFS=':' read -r source name path <<< "$skill"
+        if [[ "$source" == "personal" ]]; then
+            echo -e "${GREEN}  ${name}${NC} (personal)"
+            personal_count=$((personal_count + 1))
+        else
+            echo -e "  ${name} (superpowers)"
+            superpowers_count=$((superpowers_count + 1))
+        fi
+    done
+
+    echo
+    echo "Total: ${superpowers_count} superpowers skills, ${personal_count} personal skills"
+}
+
+# Get skill by name
+get_skill_path() {
+    local skill_name=$1
+
+    # Check personal skills first (they override)
+    if [[ -d "${PERSONAL_SKILLS_DIR}" ]]; then
+        local personal_path="${PERSONAL_SKILLS_DIR}/${skill_name}/SKILL.md"
+        if [[ -f "$personal_path" ]]; then
+            echo "$personal_path"
+            return 0
+        fi
+    fi
+
+    # Check superpowers skills
+    local superpowers_path="${SUPERPOWERS_ROOT}/skills/${skill_name}/SKILL.md"
+    if [[ -f "$superpowers_path" ]]; then
+        echo "$superpowers_path"
+        return 0
+    fi
+
+    return 1
+}
+
+# Use (load and display) a skill
+use_skill() {
+    local skill_name=$1
+
+    if skill_path=$(get_skill_path "$skill_name"); then
+        echo "=== Loading skill: ${skill_name} ==="
+        echo
+        cat "$skill_path"
+        echo
+        echo "=== End of skill: ${skill_name} ==="
+    else
+        echo -e "${RED}Error: Skill '${skill_name}' not found${NC}" >&2
+        echo "Run 'superpowers-gemini list' to see available skills" >&2
+        return 1
+    fi
+}
+
+# Search for skills
+search_skills() {
+    local query=$1
+    echo "Searching for: ${query}"
+    echo "===================="
+    echo
+
+    find_skills | while IFS=':' read -r source name path; do
+        if echo "$name" | grep -iq "$query"; then
+            if [[ "$source" == "personal" ]]; then
+                echo -e "${GREEN}  ${name}${NC} (personal)"
+            else
+                echo "  ${name} (superpowers)"
+            fi
+            
+            # Try to show first line of description
+            if [[ -f "$path" ]]; then
+                local first_line
+                first_line=$(grep -m 1 "^# " "$path" | sed 's/^# //')
+                if [[ -n "$first_line" ]]; then
+                    echo "    → ${first_line}"
+                fi
+            fi
+            echo
+        fi
+    done
+}
+
+# Bootstrap: show initial setup instructions
+bootstrap() {
+    cat <<'EOF'
+
+# Superpowers for Gemini CLI
+
+You have access to a comprehensive skills library for systematic development workflows.
+
+## How Skills Work
+
+Skills are markdown documents (SKILL.md) that contain proven techniques and workflows.
+When you encounter a task that has a relevant skill, you MUST use it.
+
+## Tool Mapping
+
+When skills reference Claude Code tools, use these Gemini CLI equivalents:
+
+- `TodoWrite` → Use Gemini's `todo` tool (see https://geminicli.com/docs/tools/todos/)
+- `Skill` tool → Run `~/.gemini/superpowers/.gemini/superpowers-gemini use-skill <name>`
+- `Read`, `Write`, `Edit` → Use your native file operations
+- `Bash` → Use your shell execution capabilities
+- Subagent tools → Handle directly (subagents may not be available yet)
+
+For complete Gemini CLI tool reference, see https://geminicli.com/docs/tools/
+For CLI commands documentation, see https://geminicli.com/docs/cli/commands/
+
+## Skills Naming
+
+- Superpowers skills: `superpowers:skill-name` (from ~/.gemini/superpowers/skills/)
+- Personal skills: `skill-name` (from ~/.gemini/skills/)
+- Personal skills override superpowers skills when names match
+
+## Critical Rules
+
+1. **BEFORE ANY TASK**: Review the skills list below
+2. **IF A RELEVANT SKILL EXISTS**: You MUST load it with:
+   
+   ```bash
+   ~/.gemini/superpowers/.gemini/superpowers-gemini use-skill <skill-name>
+   ```
+
+3. **FOLLOW THE SKILL**: Once loaded, follow its instructions exactly
+4. **NEVER SKIP**: If a skill exists for your task, using it is mandatory
+
+## Available Skills
+
+EOF
+
+    # List all skills
+    find_skills | while IFS=':' read -r source name path; do
+        if [[ "$source" == "personal" ]]; then
+            echo "- **${name}** (personal)"
+        else
+            echo "- ${name}"
+        fi
+        
+        # Extract first heading or description
+        if [[ -f "$path" ]]; then
+            local desc
+            desc=$(grep -m 1 "^# " "$path" | sed 's/^# //' || echo "")
+            if [[ -n "$desc" ]]; then
+                echo "  ${desc}"
+            fi
+        fi
+    done
+
+    cat <<'EOF'
+
+## Getting Started
+
+Load the "using-superpowers" skill to learn more:
+
+```bash
+~/.gemini/superpowers/.gemini/superpowers-gemini use-skill using-superpowers
+```
+
+Or browse all skills:
+
+```bash
+~/.gemini/superpowers/.gemini/superpowers-gemini list
+```
+
+## Creating Personal Skills
+
+Create your own skills in: `~/.gemini/skills/<skill-name>/SKILL.md`
+
+Personal skills automatically override superpowers skills with the same name.
+
+-----
+
+Now that you've been introduced to the skills system, check for relevant skills before starting your work!
+EOF
+}
+
+# Main command router
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 1
+    fi
+
+    case "$1" in
+        bootstrap)
+            bootstrap
+            ;;
+        use-skill)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: use-skill requires a skill name" >&2
+                exit 1
+            fi
+            use_skill "$2"
+            ;;
+        list)
+            list_skills
+            ;;
+        search)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: search requires a query" >&2
+                exit 1
+            fi
+            search_skills "$2"
+            ;;
+        help|--help|-h)
+            usage
+            ;;
+        *)
+            echo "Error: Unknown command '$1'" >&2
+            echo
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
